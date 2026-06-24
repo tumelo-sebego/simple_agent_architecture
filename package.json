@@ -1,0 +1,27 @@
+{
+  "name": "simple_agent_architecture",
+  "version": "1.0.0",
+  "description": "a simple ai agent architecture deployed on Render",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tumelo-sebego/simple_agent_architecture.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/tumelo-sebego/simple_agent_architecture/issues"
+  },
+  "homepage": "https://github.com/tumelo-sebego/simple_agent_architecture#readme",
+  "dependencies": {
+    "@google/genai": "^2.10.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "mongoose": "^9.7.2"
+  }
+}
