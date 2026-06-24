@@ -31,7 +31,7 @@ const SessionSchema = new mongoose.Schema({
 const Session = mongoose.model('Session', SessionSchema);
 
 // Target model name for Ollama Cloud
-const MODEL_NAME = 'gemma4:3b'; 
+const MODEL_NAME = 'gemma4:31b'; 
 
 // ==========================================
 // 2. HELPER FUNCTION: CALL OLLAMA CLOUD API
