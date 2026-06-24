@@ -1,6 +1,5 @@
 import express from 'express';
 import mongoose from 'mongoose';
-import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -17,13 +16,13 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB Atlas'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Schema to store the back-and-forth session history
+// Chat schema mapped perfectly to Ollama's expected array structure
 const SessionSchema = new mongoose.Schema({
   sessionId: { type: String, required: true, unique: true },
   history: [
     {
-      role: { type: String, enum: ['user', 'model'], required: true },
-      parts: [{ text: { type: String, required: true } }]
+      role: { type: String, enum: ['user', 'assistant', 'system'], required: true },
+      content: { type: String, required: true }
     }
   ],
   updatedAt: { type: Date, default: Date.now }
@@ -31,27 +30,49 @@ const SessionSchema = new mongoose.Schema({
 
 const Session = mongoose.model('Session', SessionSchema);
 
+// Target model name for Ollama Cloud
+const MODEL_NAME = 'gemma4:3b'; 
+
 // ==========================================
-// 2. GEMINI API INITIALIZATION
+// 2. HELPER FUNCTION: CALL OLLAMA CLOUD API
 // ==========================================
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const MODEL_NAME = 'gemini-2.5-flash';
+async function callOllamaCloud(messages) {
+  const response = await fetch('https://ollama.com/api/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.OLLAMA_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: MODEL_NAME,
+      messages: messages,
+      stream: false // Turn off streaming for easier batch processing
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ollama Cloud API Error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.message.content; // Extracts the text response
+}
 
 // ==========================================
 // 3. BACKGROUND AI AGENT ENGINE (The Worker)
 // ==========================================
 async function runAgentWorkflow(sessionId) {
   try {
-    console.log(`Starting agent workflow for session: ${sessionId}`);
+    console.log(`Starting Ollama Cloud agent workflow for session: ${sessionId}`);
 
-    // Fetch existing history or create a baseline context if new
+    // Fetch existing history or seed a pristine slate context if new
     let sessionRecord = await Session.findOne({ sessionId });
     if (!sessionRecord) {
       sessionRecord = new Session({
         sessionId,
         history: [
-          { role: 'user', parts: [{ text: 'Hello. Initialize your systems for our automated task routines.' }] },
-          { role: 'model', parts: [{ text: 'Systems initialized. I am ready to process your sequential data tasks.' }] }
+          { role: 'system', content: 'You are an automated backend task runner. Keep your technical responses precise.' }
         ]
       });
       await sessionRecord.save();
@@ -59,37 +80,25 @@ async function runAgentWorkflow(sessionId) {
 
     // --- PROMPT LOOP 1 ---
     const initialPrompt = "Task Phase 1: Review our data log status and suggest a random synthetic maintenance code command.";
+    sessionRecord.history.push({ role: 'user', content: initialPrompt });
+
+    // Call Ollama cloud using our complete history array
+    let aiOutput1 = await callOllamaCloud(sessionRecord.history);
+    console.log(`[Ollama Cloud Response 1]: ${aiOutput1}`);
     
-    // Add current user prompt to history object
-    sessionRecord.history.push({ role: 'user', parts: [{ text: initialPrompt }] });
+    // Save response to history (Ollama roles use 'assistant' instead of 'model')
+    sessionRecord.history.push({ role: 'assistant', content: aiOutput1 });
 
-    let response1 = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: sessionRecord.history // Pass the whole array to maintain context
-    });
+    // --- PROMPT LOOP 2 (Sequential chain using context) ---
+    const secondPrompt = `Task Phase 2: Take your previous response "${aiOutput1}" and wrap it inside a clean JSON schema format like { status: "processed", code: "YOUR_CODE" }. Return ONLY raw JSON text.`;
+    sessionRecord.history.push({ role: 'user', content: secondPrompt });
 
-    let aiOutput1 = response1.text;
-    console.log(`[Gemini Response 1]: ${aiOutput1}`);
+    let aiOutput2 = await callOllamaCloud(sessionRecord.history);
+    console.log(`[Ollama Cloud Response 2]: ${aiOutput2}`);
     
-    // Save AI response to history
-    sessionRecord.history.push({ role: 'model', parts: [{ text: aiOutput1 }] });
+    sessionRecord.history.push({ role: 'assistant', content: aiOutput2 });
 
-    // --- PROMPT LOOP 2 (Sequential processing using context) ---
-    const secondPrompt = `Task Phase 2: Take your previous response "${aiOutput1}" and wrap it inside a clean JSON schema format like { status: "processed", code: "YOUR_CODE" }. Return only the valid JSON.`;
-    
-    sessionRecord.history.push({ role: 'user', parts: [{ text: secondPrompt }] });
-
-    let response2 = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: sessionRecord.history
-    });
-
-    let aiOutput2 = response2.text;
-    console.log(`[Gemini Response 2]: ${aiOutput2}`);
-    
-    sessionRecord.history.push({ role: 'model', parts: [{ text: aiOutput2 }] });
-
-    // Save final state back to MongoDB
+    // Commit final history state to MongoDB Atlas
     sessionRecord.updatedAt = new Date();
     await sessionRecord.save();
     
@@ -104,24 +113,20 @@ async function runAgentWorkflow(sessionId) {
 // 4. EXPRESS ROUTES
 // ==========================================
 
-// Health check endpoint for Render monitoring
 app.get('/health', (req, res) => {
   res.status(200).send('Server is alive.');
 });
 
-// Endpoint triggered by Cron-job.org
 app.post('/trigger-agent', (req, res) => {
-  // Use a hardcoded session ID or pass one dynamically through cron JSON payload
   const sessionId = req.body.sessionId || "automated_daily_routine";
 
-  // CRITICAL: Immediately send status 200 back to Cron-job.org 
-  // This keeps the connection under 1-2 seconds, avoiding a 30-second timeout.
+  // Instantly free up cron-job.org / manual cURL triggers
   res.status(200).json({
     status: "accepted",
-    message: "Agent workflow triggered in background process."
+    message: "Ollama Cloud workflow triggered in background process."
   });
 
-  // Run the long sequential tasks asynchronously in the background loop
+  // Execute the async chain
   runAgentWorkflow(sessionId);
 });
 
